@@ -21,6 +21,7 @@ export function renderHome(navigate) {
     <div class="menu-grid">
       <div class="menu-card" data-page="settings"><span class="menu-card-icon">\u2699\ufe0f</span><h3 class="menu-card-title">\u57fa\u672c\u8a2d\u5b9a</h3><p class="menu-card-desc">\u8a2d\u5b9a\u5b78\u5e74\u5ea6\u3001\u5e74\u7d1a\u8207\u5b78\u671f</p></div>
       <div class="menu-card" data-page="bank"><span class="menu-card-icon">\u{1f4da}</span><h3 class="menu-card-title">\u984c\u5eab\u7ba1\u7406</h3><p class="menu-card-desc">\u65b0\u589e\u3001\u7de8\u8f2f\u3001\u522a\u9664\u984c\u76ee</p></div>
+      <div class="menu-card" data-page="scan"><span class="menu-card-icon">\u{1f4f7}</span><h3 class="menu-card-title">\u8003\u5377\u6383\u63cf</h3><p class="menu-card-desc">AI \u81ea\u52d5\u8fa8\u8b58\u8003\u5377\u5716\u7247</p></div>
       <div class="menu-card" data-page="quiz"><span class="menu-card-icon">\u{1f3af}</span><h3 class="menu-card-title">\u958b\u59cb\u6e2c\u9a57</h3><p class="menu-card-desc">\u96a8\u6a5f\u51fa\u984c\u3001\u7dda\u4e0a\u4f5c\u7b54</p></div>
       <div class="menu-card" data-page="history"><span class="menu-card-icon">\u{1f4ca}</span><h3 class="menu-card-title">\u6210\u7e3e\u7d00\u9304</h3><p class="menu-card-desc">\u6b77\u6b21\u8003\u8a66\u8207\u7d71\u8a08\u5206\u6790</p></div>
     </div>
@@ -31,6 +32,8 @@ export function renderSettings(navigate) {
   const s = Storage.getSettings();
   const allSubjects = getSubjects();
   const customSubjects = Storage.getCustomSubjects();
+  const currentApiKey = Storage.getApiKey();
+  const apiKeyStatus = currentApiKey ? '\u2705 \u5df2\u8a2d\u5b9a (\u9ede\u6b64\u66f4\u63db)' : '\u8cbc\u4e0a\u60a8\u7684 Gemini API Key...';
 
   // Subject list HTML
   let subjectListHTML = '';
@@ -87,6 +90,17 @@ export function renderSettings(navigate) {
       </div>
     </div>
 
+    <!-- API Key Management -->
+    <div class="card" style="margin-top:var(--sp-xl);">
+      <h2 class="section-title">\u{1f511} Gemini API Key</h2>
+      <p style="color:var(--text-secondary);margin-bottom:var(--sp-md);">\u8003\u5377\u6383\u63cf\u529f\u80fd\u9700\u8981 Google Gemini API Key\u3002<a href="https://aistudio.google.com/apikey" target="_blank" style="color:var(--accent);">\u524d\u5f80\u53d6\u5f97 (\u514d\u8cbb)</a></p>
+      <div class="flex-row gap-sm">
+        <input class="form-input" id="settings-api-key" type="password" placeholder="${apiKeyStatus}" value="${currentApiKey}" style="flex:1;" />
+        <button class="btn btn-primary btn-sm" id="save-api-key-btn">\u5132\u5b58</button>
+        ${currentApiKey ? '<button class="btn btn-outline btn-sm" id="toggle-api-key-btn">\u{1f441}\ufe0f</button><button class="btn btn-ghost btn-sm" id="delete-api-key-btn" style="color:var(--danger);">\u{1f5d1}\ufe0f</button>' : ''}
+      </div>
+    </div>
+
     <!-- Firebase Status -->
     <div class="card" style="margin-top:var(--sp-xl);">
       <h2 class="section-title">\u2601\ufe0f \u96f2\u7aef\u540c\u6b65\u72c0\u614b</h2>
@@ -134,5 +148,32 @@ export function bindSettings(navigate) {
       showToast('\u5df2\u522a\u9664\u79d1\u76ee', 'success');
       navigate('settings'); // Refresh
     });
+  });
+
+  // Save API Key
+  document.getElementById('save-api-key-btn')?.addEventListener('click', () => {
+    const key = document.getElementById('settings-api-key').value.trim();
+    if (!key) {
+      showToast('\u8acb\u8f38\u5165 API Key', 'error');
+      return;
+    }
+    Storage.saveApiKey(key);
+    showToast('API Key \u5df2\u5132\u5b58\uff01', 'success');
+    navigate('settings');
+  });
+
+  // Toggle API Key visibility
+  document.getElementById('toggle-api-key-btn')?.addEventListener('click', () => {
+    const input = document.getElementById('settings-api-key');
+    input.type = input.type === 'password' ? 'text' : 'password';
+  });
+
+  // Delete API Key
+  document.getElementById('delete-api-key-btn')?.addEventListener('click', () => {
+    if (confirm('\u78ba\u5b9a\u8981\u522a\u9664 API Key \u55ce\uff1f')) {
+      Storage.saveApiKey('');
+      showToast('API Key \u5df2\u522a\u9664', 'success');
+      navigate('settings');
+    }
   });
 }

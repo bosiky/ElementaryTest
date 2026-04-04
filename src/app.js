@@ -6,6 +6,7 @@ import { QuestionBank } from './questionBank.js';
 import { initFirebase } from './firebase.js';
 import { renderHome, renderSettings, bindSettings } from './pages/home.js';
 import { renderBank, bindBank } from './pages/bank.js';
+import { renderScan, bindScan } from './pages/scan.js';
 import { renderQuizSetup, bindQuizSetup, renderExam, bindExam } from './pages/quiz.js';
 import { renderResult, bindResult } from './pages/result.js';
 import { renderHistory, bindHistory } from './pages/history.js';
@@ -16,6 +17,7 @@ const PAGES = {
   home: { render: renderHome, bind: null, nav: true, label: '\u{1f3e0} \u9996\u9801' },
   settings: { render: renderSettings, bind: bindSettings, nav: true, label: '\u2699\ufe0f \u8a2d\u5b9a' },
   bank: { render: renderBank, bind: bindBank, nav: true, label: '\u{1f4da} \u984c\u5eab' },
+  scan: { render: renderScan, bind: bindScan, nav: true, label: '\u{1f4f7} \u6383\u63cf' },
   quiz: { render: renderQuizSetup, bind: bindQuizSetup, nav: true, label: '\u{1f3af} \u6e2c\u9a57' },
   exam: { render: renderExam, bind: bindExam, nav: false },
   result: { render: renderResult, bind: bindResult, nav: false },

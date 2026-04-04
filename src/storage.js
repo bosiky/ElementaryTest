@@ -7,6 +7,7 @@ const STORAGE_KEYS = {
   QUESTIONS: 'quiz_questions',
   RECORDS: 'quiz_records',
   CUSTOM_SUBJECTS: 'quiz_custom_subjects',
+  API_KEY: 'quiz_api_key',
 };
 
 // Firestore helpers (lazy import to avoid bundling when unused)
@@ -59,6 +60,15 @@ export const Storage = {
     delete subjects[key];
     this.saveCustomSubjects(subjects);
     return subjects;
+  },
+
+  // ===== API Key =====
+  getApiKey() {
+    return localStorage.getItem(STORAGE_KEYS.API_KEY) || '';
+  },
+
+  saveApiKey(key) {
+    localStorage.setItem(STORAGE_KEYS.API_KEY, key);
   },
 
   // ===== Questions =====
