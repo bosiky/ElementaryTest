@@ -3,7 +3,7 @@
 import { Storage } from '../storage.js';
 import { QuestionBank, getSubjects } from '../questionBank.js';
 import { showToast, showModal, closeModal, getSubjectOptions, getGradeOptions, getSemesterOptions, getYearOptions } from '../ui-helpers.js';
-import { analyzeExamPaper, vocabularyToQuestions, validateApiKey } from '../gemini.js';
+import { analyzeMultipleImages, vocabularyToQuestions, validateApiKey } from '../gemini.js';
 
 let uploadedImages = [];
 let recognizedQuestions = [];
@@ -225,17 +225,25 @@ async function startRecognition() {
   btn.textContent = '\u8fa8\u8b58\u4e2d...';
   progress.style.display = 'block';
 
-  for (let i = 0; i < uploadedImages.length; i++) {
-    const pct = ((i) / uploadedImages.length * 100).toFixed(0);
-    progressFill.style.width = `${pct}%`;
-    progressText.textContent = `\u6b63\u5728\u8fa8\u8b58\u7b2c ${i + 1}/${uploadedImages.length} \u5f35\u5716\u7247...`;
+  // Use rate-limited batch processing (4s delay between images + auto retry on 429)
+  const result = await analyzeMultipleImages(
+    uploadedImages,
+    subject,
+    subjectName,
+    (index, total, status) => {
+      const pct = ((index + 1) / total * 100).toFixed(0);
+      progressFill.style.width = `${pct}%`;
+      progressText.textContent = status;
+    }
+  );
 
-    try {
-      const result = await analyzeExamPaper(uploadedImages[i].data, subject, subjectName);
-      if (result.questions) recognizedQuestions.push(...result.questions);
-      if (result.vocabulary) recognizedVocab.push(...result.vocabulary);
-    } catch (err) {
-      showToast(`\u5716\u7247 ${i + 1} \u8fa8\u8b58\u5931\u6557: ${err.message}`, 'error');
+  recognizedQuestions = result.questions || [];
+  recognizedVocab = result.vocabulary || [];
+
+  // Show errors if any
+  if (result.errors?.length > 0) {
+    for (const e of result.errors) {
+      showToast(`\u5716\u7247 ${e.index + 1} (${e.name}) \u5931\u6557: ${e.error}`, 'error');
     }
   }
 
