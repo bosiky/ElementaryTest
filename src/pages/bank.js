@@ -6,9 +6,13 @@ import { showToast, showModal, closeModal, getSubjectOptions, getTypeOptions } f
 import { cleanupBadQuestions } from '../gemini.js';
 
 let currentImage = null;
+let selectedIds = new Set();
+let isSelectMode = false;
+const PAGE_SIZE = 50;
+let currentPage = 1;
 
 export function renderBank(navigate) {
-  // Auto-cleanup bad question patterns (English-to-Chinese translations, etc.)
+  // Auto-cleanup bad question patterns
   const removed = cleanupBadQuestions();
   if (removed > 0) {
     setTimeout(() => showToast(`\u5df2\u81ea\u52d5\u6e05\u9664 ${removed} \u984c\u4e0d\u9069\u5408\u7684\u984c\u578b`, 'success'), 100);
@@ -17,23 +21,34 @@ export function renderBank(navigate) {
   const settings = Storage.getSettings();
   const questions = Storage.getFilteredQuestions({ year: settings.year, grade: settings.grade, semester: settings.semester });
 
+  // Collect scopes for filter
+  const allScopes = [...new Set(questions.map(q => q.scope).filter(Boolean))];
+
+  // Pagination
+  const totalPages = Math.ceil(questions.length / PAGE_SIZE) || 1;
+  if (currentPage > totalPages) currentPage = totalPages;
+  const startIdx = (currentPage - 1) * PAGE_SIZE;
+  const pageQuestions = questions.slice(startIdx, startIdx + PAGE_SIZE);
+
   let listHtml = '';
   if (questions.length === 0) {
     listHtml = `<div class="empty-state"><div class="empty-state-icon">\u{1f4ed}</div><p class="empty-state-text">\u76ee\u524d\u6c92\u6709\u984c\u76ee</p><p class="empty-state-hint">\u9ede\u64ca\u4e0a\u65b9\u300c\u65b0\u589e\u984c\u76ee\u300d\u958b\u59cb\u5efa\u7acb\u984c\u5eab</p></div>`;
   } else {
-    listHtml = `<div class="question-list">` + questions.map((q, i) => {
+    listHtml = `<div class="question-list" id="question-list">` + pageQuestions.map((q, i) => {
       const subj = SUBJECTS[q.subject] || { icon: '', name: q.subject };
-      const diff = DIFFICULTIES[q.difficulty] || { name: q.difficulty, color: 'info' };
       const typeInfo = QUESTION_TYPES[q.type] || { name: q.type };
-      return `<div class="question-item">
-        <div class="question-number">${i + 1}</div>
+      const globalIdx = startIdx + i;
+      const checked = selectedIds.has(q.id) ? 'checked' : '';
+      return `<div class="question-item ${selectedIds.has(q.id) ? 'selected-item' : ''}" data-id="${q.id}">
+        ${isSelectMode ? `<label class="q-checkbox-label"><input type="checkbox" class="q-checkbox" data-id="${q.id}" ${checked} /></label>` : ''}
+        <div class="question-number">${globalIdx + 1}</div>
         <div class="question-content">
           ${q.content?.image ? `<img src="${q.content.image}" class="question-image" alt="question image"/>` : ''}
           <div class="question-text">${escapeHtml(q.content?.text || '')}</div>
           <div class="question-meta">
             <span class="tag tag-primary">${subj.icon} ${subj.name}</span>
             <span class="tag tag-info">${typeInfo.name}</span>
-            ${q.scope ? `<span class="tag tag-warning">${escapeHtml(q.scope)}</span>` : ''}
+            ${q.scope ? `<span class="tag tag-warning">${escapeHtml(q.scope)}</span>` : '<span class="tag tag-ghost">\u7121\u7bc4\u570d</span>'}
             <span class="tag tag-accent">\u7b54\u6848: ${escapeHtml(q.answer)}</span>
           </div>
         </div>
@@ -43,20 +58,73 @@ export function renderBank(navigate) {
         </div>
       </div>`;
     }).join('') + `</div>`;
+
+    // Pagination controls
+    if (totalPages > 1) {
+      listHtml += `<div class="pagination" style="display:flex;justify-content:center;align-items:center;gap:8px;margin-top:var(--sp-lg);">
+        <button class="btn btn-sm btn-outline" id="page-prev" ${currentPage <= 1 ? 'disabled' : ''}>\u2b05</button>
+        <span class="text-secondary" style="font-size:0.9rem;">
+          \u7b2c ${currentPage} / ${totalPages} \u9801 (\u5171 ${questions.length} \u984c)
+        </span>
+        <button class="btn btn-sm btn-outline" id="page-next" ${currentPage >= totalPages ? 'disabled' : ''}>\u27a1</button>
+      </div>`;
+    }
   }
+
+  // Scope batch-assign section
+  const noScopeCount = questions.filter(q => !q.scope).length;
+  const batchScopeHtml = noScopeCount > 0 ? `
+    <div class="card" style="margin-bottom:var(--sp-md);padding:var(--sp-md);border:1px solid var(--warning);background:var(--bg-elevated);">
+      <div class="flex-between flex-wrap gap-sm">
+        <div>
+          <strong style="color:var(--warning);">\u26a0\ufe0f ${noScopeCount} \u984c\u5c1a\u672a\u8a2d\u5b9a\u7bc4\u570d</strong>
+          <p style="font-size:0.85rem;color:var(--text-secondary);margin:4px 0 0;">\u8f38\u5165\u7bc4\u570d\u540d\u7a31\u5f8c\u6309\u300c\u5957\u7528\u300d\u53ef\u4e00\u6b21\u8a2d\u5b9a\u6240\u6709\u6c92\u6709\u7bc4\u570d\u7684\u984c\u76ee</p>
+        </div>
+        <div class="flex-row gap-sm" style="align-items:center;">
+          <input class="form-input" id="batch-scope-input" placeholder="\u4f8b: Our World Book 2 Unit 7" style="min-width:220px;" />
+          <button class="btn btn-sm btn-primary" id="batch-scope-btn">\u5957\u7528</button>
+        </div>
+      </div>
+    </div>` : '';
+
+  // Select mode toolbar
+  const selectToolbar = `
+    <div class="card" id="select-toolbar" style="display:${isSelectMode ? 'block' : 'none'};margin-bottom:var(--sp-md);padding:var(--sp-sm) var(--sp-md);background:var(--bg-elevated);border:1px solid var(--accent);">
+      <div class="flex-between flex-wrap gap-sm" style="align-items:center;">
+        <div class="flex-row gap-sm" style="align-items:center;">
+          <label style="cursor:pointer;display:flex;align-items:center;gap:6px;">
+            <input type="checkbox" id="select-all-cb" />
+            <span style="font-size:0.9rem;">\u5168\u9078 (\u672c\u9801)</span>
+          </label>
+          <span id="selected-count" style="font-size:0.85rem;color:var(--text-secondary);">\u5df2\u9078 ${selectedIds.size} \u984c</span>
+        </div>
+        <div class="flex-row gap-sm">
+          <button class="btn btn-sm btn-outline" id="batch-scope-selected-btn" ${selectedIds.size === 0 ? 'disabled' : ''}>\u{1f4dd} \u8a2d\u5b9a\u7bc4\u570d</button>
+          <button class="btn btn-sm btn-danger" id="batch-delete-btn" ${selectedIds.size === 0 ? 'disabled' : ''}>\u{1f5d1}\ufe0f \u522a\u9664\u5df2\u9078 (${selectedIds.size})</button>
+        </div>
+      </div>
+    </div>`;
 
   return `<div class="page-enter">
     <div class="flex-between flex-wrap gap-md mb-lg">
       <div><h1 class="page-title">\u{1f4da} \u984c\u5eab\u7ba1\u7406</h1>
         <p class="page-subtitle" style="margin-bottom:0">${settings.year} \u5b78\u5e74\u5ea6 ${QuestionBank.formatGrade(settings.grade)} ${QuestionBank.formatSemester(settings.semester)} - \u5171 ${questions.length} \u984c</p>
       </div>
-      <div class="flex-row gap-sm">
+      <div class="flex-row gap-sm flex-wrap">
         <button class="btn btn-primary" id="add-question-btn">\u2795 \u65b0\u589e\u984c\u76ee</button>
+        <button class="btn ${isSelectMode ? 'btn-accent' : 'btn-outline'}" id="toggle-select-btn">\u2611\ufe0f ${isSelectMode ? '\u53d6\u6d88\u591a\u9078' : '\u591a\u9078\u6a21\u5f0f'}</button>
+        ${questions.length > 0 ? `<button class="btn btn-outline btn-danger-text" id="delete-all-btn">\u{1f5d1}\ufe0f \u5168\u90e8\u522a\u9664</button>` : ''}
         <button class="btn btn-outline" id="export-btn">\u{1f4e4} \u532f\u51fa</button>
         <button class="btn btn-outline" id="import-btn">\u{1f4e5} \u532f\u5165</button>
       </div>
     </div>
+    ${batchScopeHtml}
+    ${selectToolbar}
     ${listHtml}
+    ${questions.length > 5 ? `<div style="display:flex;justify-content:center;gap:8px;margin-top:var(--sp-lg);">
+      <button class="btn btn-sm btn-ghost" id="scroll-top-btn">\u2b06 \u56de\u5230\u9802\u90e8</button>
+      <button class="btn btn-sm btn-ghost" id="scroll-bottom-btn">\u2b07 \u6edd\u5230\u5e95\u90e8</button>
+    </div>` : ''}
   </div>`;
 }
 
@@ -65,6 +133,110 @@ export function bindBank(navigate) {
   document.getElementById('export-btn')?.addEventListener('click', handleExport);
   document.getElementById('import-btn')?.addEventListener('click', handleImport.bind(null, navigate));
 
+  // Toggle select mode
+  document.getElementById('toggle-select-btn')?.addEventListener('click', () => {
+    isSelectMode = !isSelectMode;
+    if (!isSelectMode) selectedIds.clear();
+    navigate('bank');
+  });
+
+  // Scroll buttons
+  document.getElementById('scroll-top-btn')?.addEventListener('click', () => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+  document.getElementById('scroll-bottom-btn')?.addEventListener('click', () => {
+    window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+  });
+
+  // Pagination
+  document.getElementById('page-prev')?.addEventListener('click', () => {
+    if (currentPage > 1) { currentPage--; navigate('bank'); }
+  });
+  document.getElementById('page-next')?.addEventListener('click', () => {
+    currentPage++; navigate('bank');
+  });
+
+  // Select mode checkboxes
+  if (isSelectMode) {
+    document.querySelectorAll('.q-checkbox').forEach(cb => {
+      cb.addEventListener('change', () => {
+        if (cb.checked) selectedIds.add(cb.dataset.id);
+        else selectedIds.delete(cb.dataset.id);
+        updateSelectUI();
+      });
+    });
+
+    document.getElementById('select-all-cb')?.addEventListener('change', (e) => {
+      document.querySelectorAll('.q-checkbox').forEach(cb => {
+        cb.checked = e.target.checked;
+        if (e.target.checked) selectedIds.add(cb.dataset.id);
+        else selectedIds.delete(cb.dataset.id);
+      });
+      updateSelectUI();
+    });
+  }
+
+  // Batch scope for selected
+  document.getElementById('batch-scope-selected-btn')?.addEventListener('click', () => {
+    if (selectedIds.size === 0) return;
+    const scope = prompt('\u8acb\u8f38\u5165\u7bc4\u570d\u540d\u7a31\uff08\u4f8b\u5982: Our World Book 2 Unit 7\uff09');
+    if (scope === null) return;
+    const questions = Storage.getQuestions();
+    let updated = 0;
+    for (const q of questions) {
+      if (selectedIds.has(q.id)) { q.scope = scope; updated++; }
+    }
+    Storage.saveQuestions(questions);
+    selectedIds.clear();
+    showToast(`\u5df2\u66f4\u65b0 ${updated} \u984c\u7684\u7bc4\u570d\u70ba\u300c${scope}\u300d`, 'success');
+    navigate('bank');
+  });
+
+  // Batch delete selected
+  document.getElementById('batch-delete-btn')?.addEventListener('click', () => {
+    if (selectedIds.size === 0) return;
+    if (!confirm(`\u78ba\u5b9a\u8981\u522a\u9664\u5df2\u9078\u7684 ${selectedIds.size} \u984c\u55ce\uff1f`)) return;
+    let questions = Storage.getQuestions();
+    questions = questions.filter(q => !selectedIds.has(q.id));
+    Storage.saveQuestions(questions);
+    showToast(`\u5df2\u522a\u9664 ${selectedIds.size} \u984c`, 'success');
+    selectedIds.clear();
+    navigate('bank');
+  });
+
+  // Delete all
+  document.getElementById('delete-all-btn')?.addEventListener('click', () => {
+    const settings = Storage.getSettings();
+    const filtered = Storage.getFilteredQuestions({ year: settings.year, grade: settings.grade, semester: settings.semester });
+    if (filtered.length === 0) return;
+    if (!confirm(`\u78ba\u5b9a\u8981\u522a\u9664\u7576\u524d\u7be9\u9078\u7684\u5168\u90e8 ${filtered.length} \u984c\u55ce\uff1f\u6b64\u64cd\u4f5c\u7121\u6cd5\u5fa9\u539f\uff01`)) return;
+    const filteredIds = new Set(filtered.map(q => q.id));
+    const remaining = Storage.getQuestions().filter(q => !filteredIds.has(q.id));
+    Storage.saveQuestions(remaining);
+    showToast(`\u5df2\u522a\u9664 ${filtered.length} \u984c`, 'success');
+    navigate('bank');
+  });
+
+  // Batch scope for no-scope questions
+  document.getElementById('batch-scope-btn')?.addEventListener('click', () => {
+    const scope = document.getElementById('batch-scope-input')?.value?.trim();
+    if (!scope) { showToast('\u8acb\u8f38\u5165\u7bc4\u570d\u540d\u7a31', 'error'); return; }
+    const questions = Storage.getQuestions();
+    const settings = Storage.getSettings();
+    let updated = 0;
+    for (const q of questions) {
+      if (q.year === settings.year && q.grade === settings.grade && q.semester === settings.semester && !q.scope) {
+        q.scope = scope;
+        updated++;
+      }
+    }
+    if (updated === 0) { showToast('\u6c92\u6709\u9700\u8981\u66f4\u65b0\u7684\u984c\u76ee', 'info'); return; }
+    Storage.saveQuestions(questions);
+    showToast(`\u5df2\u5c07 ${updated} \u984c\u8a2d\u5b9a\u7bc4\u570d\u70ba\u300c${scope}\u300d`, 'success');
+    navigate('bank');
+  });
+
+  // Per-question edit/delete
   document.querySelectorAll('.edit-q-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const q = Storage.getQuestions().find(x => x.id === btn.dataset.id);
@@ -80,6 +252,24 @@ export function bindBank(navigate) {
         navigate('bank');
       }
     });
+  });
+}
+
+function updateSelectUI() {
+  const countEl = document.getElementById('selected-count');
+  if (countEl) countEl.textContent = `\u5df2\u9078 ${selectedIds.size} \u984c`;
+  const delBtn = document.getElementById('batch-delete-btn');
+  if (delBtn) {
+    delBtn.disabled = selectedIds.size === 0;
+    delBtn.textContent = `\u{1f5d1}\ufe0f \u522a\u9664\u5df2\u9078 (${selectedIds.size})`;
+  }
+  const scopeBtn = document.getElementById('batch-scope-selected-btn');
+  if (scopeBtn) scopeBtn.disabled = selectedIds.size === 0;
+
+  // Highlight selected items
+  document.querySelectorAll('.question-item').forEach(item => {
+    if (selectedIds.has(item.dataset.id)) item.classList.add('selected-item');
+    else item.classList.remove('selected-item');
   });
 }
 
@@ -190,7 +380,7 @@ function openQuestionModal(existingQ, navigate) {
 
     if (isEdit) {
       Storage.updateQuestion(existingQ.id, {
-        subject: data.subject, type: data.type, difficulty: data.difficulty,
+        subject: data.subject, type: data.type, scope: data.scope,
         content: { text: data.text, image: data.image },
         options: data.options, answer: data.answer,
       });
