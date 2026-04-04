@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="國小學生線上測驗平台 - 支援題庫管理、隨機出題、自動改卷" />
+  <meta name="theme-color" content="#7c5cfc" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>國小學生測驗平台</title>
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="icon" href="/icons/icon-192.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="/icons/icon-192.svg" />
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Navigation -->
+    <nav id="main-nav" class="glass-nav">
+      <div class="nav-brand">
+        <span class="nav-icon">📚</span>
+        <span class="nav-title">國小測驗平台</span>
+      </div>
+      <div class="nav-links" id="nav-links"></div>
+      <div class="nav-settings" id="nav-settings-badge"></div>
+    </nav>
+
+    <!-- Page Container -->
+    <main id="page-container" class="page-container">
+      <!-- Pages will be rendered here -->
+    </main>
+  </div>
+
+  <script type="module" src="/src/storage.js"></script>
+  <script type="module" src="/src/questionBank.js"></script>
+  <script type="module" src="/src/quizEngine.js"></script>
+  <script type="module" src="/src/grader.js"></script>
+  <script type="module" src="/src/stats.js"></script>
+  <script type="module" src="/src/app.js"></script>
+
+  <script>
+    // Register Service Worker for offline support
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js')
+          .then((reg) => console.log('SW registered:', reg.scope))
+          .catch((err) => console.log('SW registration failed:', err));
+      });
+    }
+  </script>
+</body>
+</html>
