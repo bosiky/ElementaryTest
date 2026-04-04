@@ -3,10 +3,17 @@
 import { Storage } from '../storage.js';
 import { SUBJECTS, QUESTION_TYPES, DIFFICULTIES, QuestionBank } from '../questionBank.js';
 import { showToast, showModal, closeModal, getSubjectOptions, getTypeOptions, getDifficultyOptions } from '../ui-helpers.js';
+import { cleanupBadQuestions } from '../gemini.js';
 
 let currentImage = null;
 
 export function renderBank(navigate) {
+  // Auto-cleanup bad question patterns (English-to-Chinese translations, etc.)
+  const removed = cleanupBadQuestions();
+  if (removed > 0) {
+    setTimeout(() => showToast(`\u5df2\u81ea\u52d5\u6e05\u9664 ${removed} \u984c\u4e0d\u9069\u5408\u7684\u984c\u578b`, 'success'), 100);
+  }
+
   const settings = Storage.getSettings();
   const questions = Storage.getFilteredQuestions({ year: settings.year, grade: settings.grade, semester: settings.semester });
 

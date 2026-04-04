@@ -1,46 +1,102 @@
 // gemini.js - Google Gemini API integration for exam paper scanning
-// With rate limiting, retry logic, and batch support
+// With model fallback chain, image compression, retry, and rate limiting
 
 import { Storage } from './storage.js';
 
-const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
-const MAX_RETRIES = 3;
-const BASE_DELAY_MS = 5000; // 5 seconds base delay for retry
+// Model fallback chain - try each in order if rate limited
+const MODELS = [
+  { id: 'gemini-2.5-flash-lite', name: '2.5 Flash Lite (15 RPM)', rpm: 15 },
+  { id: 'gemini-3.1-flash-lite', name: '3.1 Flash Lite (11 RPM)', rpm: 11 },
+  { id: 'gemini-3-flash', name: '3 Flash (5 RPM)', rpm: 5 },
+  { id: 'gemini-2.5-flash', name: '2.5 Flash (5 RPM)', rpm: 5 },
+];
+const API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
+const MAX_RETRIES = 2;
+const BASE_DELAY_MS = 10000;
+const DELAY_BETWEEN_IMAGES = 6000;
+const MAX_IMAGE_WIDTH = 1600;
+const IMAGE_QUALITY = 0.85;
 
-/**
- * Sleep for a given number of milliseconds
- */
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 /**
- * Analyze an exam paper image using Gemini AI (with retry)
- * @param {string} base64Image - Base64-encoded image data (with data URI prefix)
- * @param {string} subject - Subject key
- * @param {string} subjectName - Display name of the subject
- * @returns {Promise<{questions: Array, vocabulary: Array}>}
+ * Compress image to reduce payload
  */
-export async function analyzeExamPaper(base64Image, subject, subjectName) {
-  const apiKey = Storage.getApiKey();
-  if (!apiKey) {
-    throw new Error('\u8acb\u5148\u5728\u8a2d\u5b9a\u9801\u586b\u5165 Gemini API Key');
-  }
+function compressImage(base64Image) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      let { width, height } = img;
+      if (width > MAX_IMAGE_WIDTH) {
+        height = Math.round(height * (MAX_IMAGE_WIDTH / width));
+        width = MAX_IMAGE_WIDTH;
+      }
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, width, height);
+      const compressed = canvas.toDataURL('image/jpeg', IMAGE_QUALITY);
+      const origKB = (base64Image.length * 0.75 / 1024).toFixed(0);
+      const newKB = (compressed.length * 0.75 / 1024).toFixed(0);
+      console.log(`[Gemini] Image: ${origKB}KB -> ${newKB}KB (${width}x${height})`);
+      resolve(compressed);
+    };
+    img.onerror = () => resolve(base64Image);
+    img.src = base64Image;
+  });
+}
 
-  const base64Data = base64Image.replace(/^data:image\/\w+;base64,/, '');
-  const mimeType = base64Image.match(/^data:(image\/\w+);/)?.[1] || 'image/jpeg';
+/**
+ * Parse AI response - handles multiple formats
+ */
+function parseResponse(text) {
+  if (!text) return null;
+  // Direct JSON
+  try {
+    const r = JSON.parse(text);
+    if (r.questions || r.vocabulary) return r;
+  } catch (e) { /* continue */ }
+  // Markdown code block
+  const m = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (m) { try { const r = JSON.parse(m[1].trim()); if (r.questions || r.vocabulary) return r; } catch (e) {} }
+  // Find JSON object
+  const b = text.match(/\{[\s\S]*\}/);
+  if (b) { try { const r = JSON.parse(b[0]); if (r.questions || r.vocabulary) return r; } catch (e) {} }
+  return null;
+}
+
+/**
+ * Try sending to a specific model
+ */
+async function tryModel(modelId, requestBody, apiKey) {
+  const url = `${API_BASE}/${modelId}:generateContent?key=${apiKey}`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(requestBody),
+  });
+  return response;
+}
+
+/**
+ * Send image to Gemini with model fallback chain
+ */
+async function analyzeOneImage(base64Image, subject, subjectName, onStatus) {
+  const apiKey = Storage.getApiKey();
+  if (!apiKey) throw new Error('\u8acb\u5148\u5728\u8a2d\u5b9a\u9801\u586b\u5165 Gemini API Key');
+
+  const compressed = await compressImage(base64Image);
+  const base64Data = compressed.replace(/^data:image\/\w+;base64,/, '');
   const prompt = buildPrompt(subject, subjectName);
 
   const requestBody = {
     contents: [{
       parts: [
         { text: prompt },
-        {
-          inline_data: {
-            mime_type: mimeType,
-            data: base64Data,
-          }
-        }
+        { inline_data: { mime_type: 'image/jpeg', data: base64Data } }
       ]
     }],
     generationConfig: {
@@ -49,95 +105,114 @@ export async function analyzeExamPaper(base64Image, subject, subjectName) {
     }
   };
 
-  // Retry with exponential backoff
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    try {
-      const response = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
-      });
+  // Try each model in the fallback chain
+  for (let m = 0; m < MODELS.length; m++) {
+    const model = MODELS[m];
 
-      if (response.status === 429) {
-        // Rate limited - wait and retry
-        const waitTime = BASE_DELAY_MS * Math.pow(2, attempt); // 5s, 10s, 20s
-        console.warn(`[Gemini] Rate limited. Retry ${attempt + 1}/${MAX_RETRIES} after ${waitTime / 1000}s...`);
-        await sleep(waitTime);
-        continue;
-      }
-
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({}));
-        if (response.status === 400) throw new Error('API Key \u7121\u6548\u6216\u5716\u7247\u683c\u5f0f\u4e0d\u652f\u63f4');
-        throw new Error(err.error?.message || `API \u932f\u8aa4 (${response.status})`);
-      }
-
-      const data = await response.json();
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-
-      if (!text) {
-        throw new Error('\u7121\u6cd5\u89e3\u6790 AI \u56de\u61c9');
-      }
-
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       try {
-        const result = JSON.parse(text);
+        const statusMsg = `\u4f7f\u7528 ${model.name} (attempt ${attempt + 1})...`;
+        console.log(`[Gemini] ${statusMsg}`);
+        onStatus?.(statusMsg);
+
+        const response = await tryModel(model.id, requestBody, apiKey);
+        console.log(`[Gemini] ${model.id} -> ${response.status}`);
+
+        if (response.status === 429) {
+          if (attempt < MAX_RETRIES - 1) {
+            const wait = BASE_DELAY_MS * Math.pow(2, attempt);
+            console.warn(`[Gemini] ${model.id} rate limited. Waiting ${wait/1000}s...`);
+            onStatus?.(`${model.name} \u983b\u7387\u9650\u5236\uff0c\u7b49\u5f85 ${wait/1000} \u79d2...`);
+            await sleep(wait);
+            continue;
+          }
+          // This model is exhausted, try next model
+          console.warn(`[Gemini] ${model.id} exhausted. Trying next model...`);
+          onStatus?.(`${model.name} \u984d\u5ea6\u8017\u76e1\uff0c\u5207\u63db\u4e0b\u4e00\u500b\u6a21\u578b...`);
+          break;
+        }
+
+        if (!response.ok) {
+          const errText = await response.text();
+          console.error(`[Gemini] Error:`, errText);
+          if (response.status === 400) throw new Error('API Key \u7121\u6548\u6216\u5716\u7247\u683c\u5f0f\u932f\u8aa4');
+          throw new Error(`API \u932f\u8aa4 (${response.status})`);
+        }
+
+        const data = await response.json();
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        console.log(`[Gemini] Response from ${model.id}:`, text?.substring(0, 300));
+
+        if (!text) {
+          const reason = data.candidates?.[0]?.finishReason;
+          if (reason === 'SAFETY') throw new Error('\u5716\u7247\u88ab\u5b89\u5168\u904e\u6ffe\u5668\u6514\u622a');
+          throw new Error('\u7121\u6cd5\u53d6\u5f97 AI \u56de\u61c9');
+        }
+
+        const result = parseResponse(text);
+        if (!result) {
+          console.error(`[Gemini] Parse failed:`, text);
+          throw new Error('\u7121\u6cd5\u89e3\u6790 JSON');
+        }
+
+        console.log(`[Gemini] Success via ${model.id}: ${result.questions?.length || 0}q, ${result.vocabulary?.length || 0}v`);
         return {
           questions: Array.isArray(result.questions) ? result.questions : [],
           vocabulary: Array.isArray(result.vocabulary) ? result.vocabulary : [],
+          model: model.name,
+          rawResponse: text.substring(0, 200),
         };
-      } catch (e) {
-        throw new Error('\u7121\u6cd5\u89e3\u6790 AI \u56de\u61c9\u7684 JSON \u683c\u5f0f');
-      }
-    } catch (error) {
-      // If it's a non-retryable error, throw immediately
-      if (!error.message?.includes('Rate') && attempt === 0) {
-        throw error;
-      }
-      if (attempt === MAX_RETRIES - 1) {
-        throw error;
+
+      } catch (error) {
+        if (error.message?.includes('\u7121\u6548') || error.message?.includes('\u5b89\u5168')) throw error;
+        if (attempt === MAX_RETRIES - 1 && m === MODELS.length - 1) throw error;
+        if (attempt === MAX_RETRIES - 1) break; // try next model
+        await sleep(BASE_DELAY_MS);
       }
     }
   }
 
-  throw new Error('\u91cd\u8a66\u591a\u6b21\u5f8c\u4ecd\u7136\u5931\u6557\uff0c\u8acb\u7a0d\u5f8c\u518d\u8a66');
+  throw new Error('\u6240\u6709\u6a21\u578b\u7686\u5df2\u8017\u76e1\u914d\u984d\uff0c\u8acb\u7b49\u5f85\u5e7e\u5206\u9418\u5f8c\u518d\u8a66');
 }
 
 /**
- * Analyze multiple exam images with automatic rate limiting
- * Processes one image at a time with delays between each
- * @param {Array<{data: string, name: string}>} images - Array of image objects
- * @param {string} subject - Subject key
- * @param {string} subjectName - Display name
- * @param {function} onProgress - Progress callback (index, total, status)
- * @returns {Promise<{questions: Array, vocabulary: Array, errors: Array}>}
+ * Analyze multiple images one by one with delays and model fallback
  */
 export async function analyzeMultipleImages(images, subject, subjectName, onProgress) {
   const allQuestions = [];
   const allVocabulary = [];
   const errors = [];
-  const DELAY_BETWEEN_MS = 4000; // 4 seconds between requests
+  const debugInfo = [];
 
   for (let i = 0; i < images.length; i++) {
-    onProgress?.(i, images.length, `\u6b63\u5728\u8fa8\u8b58\u7b2c ${i + 1}/${images.length} \u5f35\u5716\u7247...`);
+    onProgress?.(i, images.length, `\u6b63\u5728\u8fa8\u8b58\u7b2c ${i + 1}/${images.length} \u5f35...`);
 
     try {
-      const result = await analyzeExamPaper(images[i].data, subject, subjectName);
-      if (result.questions) allQuestions.push(...result.questions);
-      if (result.vocabulary) allVocabulary.push(...result.vocabulary);
-      onProgress?.(i, images.length, `\u7b2c ${i + 1} \u5f35\u5b8c\u6210\uff01\u627e\u5230 ${result.questions?.length || 0} \u984c`);
+      const result = await analyzeOneImage(
+        images[i].data, subject, subjectName,
+        (status) => onProgress?.(i, images.length, `\u5716 ${i+1}: ${status}`)
+      );
+      if (result.questions?.length > 0) allQuestions.push(...result.questions);
+      if (result.vocabulary?.length > 0) allVocabulary.push(...result.vocabulary);
+      debugInfo.push({ name: images[i].name, questions: result.questions?.length || 0, model: result.model, raw: result.rawResponse });
+      onProgress?.(i + 1, images.length,
+        `\u7b2c ${i+1} \u5f35 (${result.model}): ${result.questions?.length || 0} \u984c`);
     } catch (err) {
       errors.push({ index: i, name: images[i].name, error: err.message });
-      onProgress?.(i, images.length, `\u7b2c ${i + 1} \u5f35\u5931\u6557: ${err.message}`);
+      debugInfo.push({ name: images[i].name, error: err.message });
+      onProgress?.(i + 1, images.length, `\u7b2c ${i+1} \u5f35\u5931\u6557: ${err.message}`);
     }
 
-    // Wait between requests (skip after last one)
     if (i < images.length - 1) {
-      onProgress?.(i, images.length, `\u7b49\u5f85 ${DELAY_BETWEEN_MS / 1000} \u79d2\u907f\u514d\u983b\u7387\u9650\u5236...`);
-      await sleep(DELAY_BETWEEN_MS);
+      onProgress?.(i + 1, images.length, `\u7b49\u5f85 ${DELAY_BETWEEN_IMAGES/1000} \u79d2...`);
+      await sleep(DELAY_BETWEEN_IMAGES);
     }
   }
 
-  return { questions: allQuestions, vocabulary: allVocabulary, errors };
+  console.log('[Gemini] === Summary ===');
+  console.table(debugInfo);
+
+  return { questions: allQuestions, vocabulary: allVocabulary, errors, debugInfo };
 }
 
 function buildPrompt(subject, subjectName) {
@@ -145,117 +220,131 @@ function buildPrompt(subject, subjectName) {
   const isMath = subject === 'math';
   const isChinese = subject === 'chinese';
 
-  let subjectSpecific = '';
-  if (isEnglish) {
-    subjectSpecific = `
-- Pay special attention to English vocabulary words. Extract each word with its Chinese meaning.
-- For vocabulary, create fill-in-the-blank questions (English to Chinese and Chinese to English).
-- Identify sentence patterns and grammar points.`;
-  } else if (isMath) {
-    subjectSpecific = `
-- For math problems, preserve the mathematical expressions clearly.
-- Include calculation steps hints if visible in the image.
-- Identify the math concept being tested (e.g., addition, multiplication, fractions).`;
-  } else if (isChinese) {
-    subjectSpecific = `
-- Extract vocabulary words (\u751f\u5b57/\u751f\u8a5e) with their pronunciation (\u6ce8\u97f3/\u62fc\u97f3) if visible.
-- Identify reading comprehension questions.
-- For vocabulary, create fill-in-the-blank questions.`;
-  }
+  let extra = '';
+  if (isEnglish) extra = `
+- Extract English vocabulary with Chinese meanings into the vocabulary array.
+- DO NOT create questions asking "What is the Chinese meaning of X" or "X 的中文意思" - we handle vocabulary separately.
+- For fill-in-the-blank questions, ALWAYS provide a COMPLETE sentence with enough context. Example: "I like to ____ on the swings at the park." NOT just "Can a penguin ____?"
+- Keep all questions in English for English subject.`;
+  else if (isMath) extra = '\n- Preserve math expressions clearly.\n- Identify the math concept being tested.';
+  else if (isChinese) extra = '\n- Extract vocabulary with pronunciation if visible.\n- Identify reading comprehension questions.';
 
-  return `You are an expert at analyzing elementary school exam papers in Traditional Chinese (\u7e41\u9ad4\u4e2d\u6587).
+  return `You are an expert at analyzing elementary school exam papers in Traditional Chinese.
 Analyze this exam paper image for the subject: ${subjectName}
+${extra}
 
-${subjectSpecific}
+IMPORTANT: You MUST extract questions from this image. Try your best even if image quality is not perfect.
 
-Extract ALL questions and vocabulary you can find. Return a JSON object with this EXACT structure:
+Return a JSON object:
 
 {
   "questions": [
     {
       "type": "choice",
-      "text": "\u984c\u76ee\u5167\u5bb9 (in Traditional Chinese)",
-      "options": ["\u9078\u9805A", "\u9078\u9805B", "\u9078\u9805C", "\u9078\u9805D"],
-      "answer": "\u6b63\u78ba\u7b54\u6848\u7684\u9078\u9805\u5167\u5bb9",
-      "difficulty": "easy|medium|hard"
+      "text": "question text",
+      "options": ["A", "B", "C", "D"],
+      "answer": "correct option text",
+      "difficulty": "easy"
     },
     {
       "type": "truefalse",
-      "text": "\u662f\u975e\u984c\u5167\u5bb9",
+      "text": "complete statement to judge true or false",
       "options": [],
-      "answer": "O or X",
-      "difficulty": "easy|medium|hard"
+      "answer": "O",
+      "difficulty": "easy"
     },
     {
       "type": "fill",
-      "text": "\u586b\u5145\u984c\u5167\u5bb9\uff0c\u7a7a\u683c\u7528 ____ \u8868\u793a",
+      "text": "A complete sentence with ____ for the blank",
       "options": [],
-      "answer": "\u6b63\u78ba\u7b54\u6848",
-      "difficulty": "easy|medium|hard"
+      "answer": "answer",
+      "difficulty": "medium"
     }
   ],
   "vocabulary": [
-    {
-      "word": "the word or character",
-      "meaning": "meaning or pronunciation",
-      "sentence": "example sentence if available"
-    }
+    {"word": "word", "meaning": "meaning", "sentence": "a complete example sentence using this word"}
   ]
 }
 
 Rules:
-1. ALL text must be in Traditional Chinese (\u7e41\u9ad4\u4e2d\u6587), except for English subject content.
-2. "type" must be one of: "choice", "truefalse", "fill"
-3. For "choice" type, "options" must have exactly 4 items. "answer" should be the exact text of the correct option.
-4. For "truefalse", "answer" must be "O" (correct) or "X" (wrong).
-5. Estimate difficulty based on grade level complexity.
-6. Extract as many questions as possible from the image.
-7. If you cannot identify a question clearly, skip it rather than guessing.
-8. Return ONLY valid JSON, no markdown or explanations.`;
+1. Use Traditional Chinese for all text (except English content).
+2. type: "choice", "truefalse", or "fill"
+3. For choice: exactly 4 options.
+4. For truefalse: answer "O" or "X".
+5. For fill: the text MUST be a complete sentence with clear context. Never create isolated blanks without context.
+6. NEVER ask for Chinese translations of English words in questions.
+7. Extract as many questions as possible.
+8. Return valid JSON only.`;
 }
 
-/**
- * Convert vocabulary items into fill-in-the-blank questions
- */
 export function vocabularyToQuestions(vocabulary, subject) {
   const questions = [];
-  for (const v of vocabulary) {
+
+  for (let i = 0; i < vocabulary.length; i++) {
+    const v = vocabulary[i];
+    if (!v.word || !v.meaning) continue;
+
     if (subject === 'english') {
+      // Fill-in with sentence context (use example sentence if available)
+      if (v.sentence) {
+        // Use the example sentence with blank
+        const sentenceWithBlank = v.sentence.replace(new RegExp(v.word, 'gi'), '____');
+        if (sentenceWithBlank !== v.sentence) {
+          questions.push({
+            type: 'fill',
+            text: sentenceWithBlank,
+            options: [], answer: v.word, difficulty: 'medium', fromVocab: true,
+          });
+        }
+      }
+
+      // Fill-in: "X的中文" 的英文是什麼？(Chinese to English only)
+      // Strip parenthetical notes for cleaner display
+      const cleanMeaning = v.meaning.replace(/\s*[（(].*?[）)]\s*/g, '').trim();
+
       questions.push({
         type: 'fill',
-        text: `\u8acb\u5beb\u51fa "${v.word}" \u7684\u4e2d\u6587\u610f\u601d`,
-        options: [],
-        answer: v.meaning,
-        difficulty: 'easy',
-        fromVocab: true,
+        text: `"${cleanMeaning}" \u7684\u82f1\u6587\u662f\u4ec0\u9ebc\uff1f`,
+        options: [], answer: v.word, difficulty: 'medium', fromVocab: true,
       });
+
+      // True/False correct: 「word」的意思是「meaning」
       questions.push({
-        type: 'fill',
-        text: `"${v.meaning}" \u7684\u82f1\u6587\u662f\u4ec0\u9ebc\uff1f`,
-        options: [],
-        answer: v.word,
-        difficulty: 'medium',
-        fromVocab: true,
+        type: 'truefalse',
+        text: `\u300c${v.word}\u300d\u7684\u610f\u601d\u662f\u300c${cleanMeaning}\u300d`,
+        options: [], answer: 'O', difficulty: 'easy', fromVocab: true,
       });
-    } else if (subject === 'chinese') {
-      if (v.meaning) {
+
+      // True/False incorrect: pick a wrong meaning from same vocabulary list
+      const others = vocabulary.filter((_, j) => j !== i && vocabulary[j].meaning);
+      if (others.length > 0) {
+        const wrong = others[Math.floor(Math.random() * others.length)];
+        const wrongClean = wrong.meaning.replace(/\s*[（(].*?[）)]\s*/g, '').trim();
         questions.push({
-          type: 'fill',
-          text: `\u8acb\u5beb\u51fa "${v.word}" \u7684\u6ce8\u97f3\u6216\u89e3\u91cb`,
-          options: [],
-          answer: v.meaning,
-          difficulty: 'easy',
-          fromVocab: true,
+          type: 'truefalse',
+          text: `\u300c${v.word}\u300d\u7684\u610f\u601d\u662f\u300c${wrongClean}\u300d`,
+          options: [], answer: 'X', difficulty: 'easy', fromVocab: true,
         });
       }
-      if (v.sentence) {
+
+    } else if (subject === 'chinese') {
+      questions.push({
+        type: 'fill',
+        text: `\u8acb\u5beb\u51fa "${v.word}" \u7684\u610f\u601d\u6216\u6ce8\u97f3`,
+        options: [], answer: v.meaning, difficulty: 'easy', fromVocab: true,
+      });
+      questions.push({
+        type: 'truefalse',
+        text: `"${v.word}" \u7684\u610f\u601d\u662f "${v.meaning}"\u3002`,
+        options: [], answer: 'O', difficulty: 'easy', fromVocab: true,
+      });
+      const others = vocabulary.filter((_, j) => j !== i && vocabulary[j].meaning);
+      if (others.length > 0) {
+        const wrong = others[Math.floor(Math.random() * others.length)];
         questions.push({
-          type: 'fill',
-          text: v.sentence.replace(v.word, '____'),
-          options: [],
-          answer: v.word,
-          difficulty: 'medium',
-          fromVocab: true,
+          type: 'truefalse',
+          text: `"${v.word}" \u7684\u610f\u601d\u662f "${wrong.meaning}"\u3002`,
+          options: [], answer: 'X', difficulty: 'easy', fromVocab: true,
         });
       }
     }
@@ -264,8 +353,31 @@ export function vocabularyToQuestions(vocabulary, subject) {
 }
 
 /**
- * Validate that an API key looks correct
+ * Clean up bad question patterns from stored questions
+ * Removes: English-to-Chinese translation questions, context-less fill-in-blanks
  */
+export function cleanupBadQuestions() {
+  const raw = localStorage.getItem('quiz_questions');
+  if (!raw) return 0;
+  const questions = JSON.parse(raw);
+  const badPatterns = [
+    /What is the Chinese meaning/i,
+    /\u8acb\u5beb\u51fa.*\u7684\u4e2d\u6587\u610f\u601d/,
+    /Chinese meaning of/i,
+    /Which word means/i,
+    /^The word '.*' means '/i,
+  ];
+  const filtered = questions.filter(q => {
+    const text = q.content?.text || '';
+    return !badPatterns.some(p => p.test(text));
+  });
+  const removed = questions.length - filtered.length;
+  if (removed > 0) {
+    localStorage.setItem('quiz_questions', JSON.stringify(filtered));
+  }
+  return removed;
+}
+
 export function validateApiKey(key) {
   return key && key.trim().length >= 20;
 }

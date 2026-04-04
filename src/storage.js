@@ -8,6 +8,7 @@ const STORAGE_KEYS = {
   RECORDS: 'quiz_records',
   CUSTOM_SUBJECTS: 'quiz_custom_subjects',
   API_KEY: 'quiz_api_key',
+  SCAN_SETTINGS: 'quiz_scan_settings',
 };
 
 // Firestore helpers (lazy import to avoid bundling when unused)
@@ -69,6 +70,16 @@ export const Storage = {
 
   saveApiKey(key) {
     localStorage.setItem(STORAGE_KEYS.API_KEY, key);
+  },
+
+  // ===== Scan Settings =====
+  getScanSettings() {
+    const data = localStorage.getItem(STORAGE_KEYS.SCAN_SETTINGS);
+    return data ? JSON.parse(data) : null;
+  },
+
+  saveScanSettings(settings) {
+    localStorage.setItem(STORAGE_KEYS.SCAN_SETTINGS, JSON.stringify(settings));
   },
 
   // ===== Questions =====

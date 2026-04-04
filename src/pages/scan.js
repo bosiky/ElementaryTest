@@ -3,7 +3,7 @@
 import { Storage } from '../storage.js';
 import { QuestionBank, getSubjects } from '../questionBank.js';
 import { showToast, showModal, closeModal, getSubjectOptions, getGradeOptions, getSemesterOptions, getYearOptions } from '../ui-helpers.js';
-import { analyzeMultipleImages, vocabularyToQuestions, validateApiKey } from '../gemini.js';
+import { analyzeMultipleImages, vocabularyToQuestions, validateApiKey, cleanupBadQuestions } from '../gemini.js';
 
 let uploadedImages = [];
 let recognizedQuestions = [];
@@ -12,8 +12,13 @@ let isProcessing = false;
 
 export function renderScan(navigate) {
   const settings = Storage.getSettings();
+  const scanSettings = Storage.getScanSettings() || {};
   const apiKey = Storage.getApiKey();
   const hasKey = apiKey && validateApiKey(apiKey);
+  // Use saved scan settings, fallback to global settings
+  const curSubject = scanSettings.subject || settings.subject || 'chinese';
+  const curGrade = scanSettings.grade || settings.grade;
+  const curSemester = scanSettings.semester || settings.semester;
 
   return `<div class="page-enter">
     <h1 class="page-title">\u{1f4f7} \u8003\u5377\u6383\u63cf</h1>
@@ -35,15 +40,15 @@ export function renderScan(navigate) {
       <div class="grid-3">
         <div class="form-group">
           <label class="form-label">\u79d1\u76ee</label>
-          <select class="form-select" id="scan-subject">${getSubjectOptions(settings.subject || 'chinese')}</select>
+          <select class="form-select" id="scan-subject">${getSubjectOptions(curSubject)}</select>
         </div>
         <div class="form-group">
           <label class="form-label">\u5e74\u7d1a</label>
-          <select class="form-select" id="scan-grade">${getGradeOptions(settings.grade)}</select>
+          <select class="form-select" id="scan-grade">${getGradeOptions(curGrade)}</select>
         </div>
         <div class="form-group">
           <label class="form-label">\u5b78\u671f</label>
-          <select class="form-select" id="scan-semester">${getSemesterOptions(settings.semester)}</select>
+          <select class="form-select" id="scan-semester">${getSemesterOptions(curSemester)}</select>
         </div>
       </div>
     </div>
@@ -209,8 +214,13 @@ async function startRecognition() {
   }
 
   const subject = document.getElementById('scan-subject').value;
+  const grade = parseInt(document.getElementById('scan-grade').value);
+  const semester = parseInt(document.getElementById('scan-semester').value);
   const subjects = getSubjects();
   const subjectName = subjects[subject]?.name || subject;
+
+  // Save scan settings for next time
+  Storage.saveScanSettings({ subject, grade, semester });
 
   isProcessing = true;
   recognizedQuestions = [];
@@ -225,13 +235,13 @@ async function startRecognition() {
   btn.textContent = '\u8fa8\u8b58\u4e2d...';
   progress.style.display = 'block';
 
-  // Use rate-limited batch processing (4s delay between images + auto retry on 429)
+  // Use rate-limited processing (5s delay between images + auto retry on 429)
   const result = await analyzeMultipleImages(
     uploadedImages,
     subject,
     subjectName,
     (index, total, status) => {
-      const pct = ((index + 1) / total * 100).toFixed(0);
+      const pct = ((index) / total * 100).toFixed(0);
       progressFill.style.width = `${pct}%`;
       progressText.textContent = status;
     }
@@ -254,7 +264,33 @@ async function startRecognition() {
   }
 
   progressFill.style.width = '100%';
-  progressText.textContent = `\u8fa8\u8b58\u5b8c\u6210\uff01\u5171\u627e\u5230 ${recognizedQuestions.length} \u984c`;
+
+  if (recognizedQuestions.length === 0) {
+    // Show debug info to help diagnose
+    let debugHtml = '<div style="margin-top:var(--sp-md);padding:var(--sp-md);background:var(--bg-elevated);border-radius:var(--radius-md);border:1px solid var(--warning);">';
+    debugHtml += '<h4 style="color:var(--warning);margin-bottom:var(--sp-sm);">\u{1f50d} \u8a3a\u65b7\u8cc7\u8a0a</h4>';
+    if (result.errors?.length > 0) {
+      debugHtml += `<p style="color:var(--danger);">\u932f\u8aa4: ${result.errors.map(e => e.error).join(', ')}</p>`;
+    }
+    if (result.debugInfo) {
+      for (const d of result.debugInfo) {
+        debugHtml += `<p style="font-size:0.85rem;color:var(--text-secondary);margin-top:var(--sp-xs);">`;
+        debugHtml += `<strong>${d.name}:</strong> `;
+        if (d.error) {
+          debugHtml += `<span style="color:var(--danger);">${d.error}</span>`;
+        } else {
+          debugHtml += `${d.questions} \u984c\u627e\u5230`;
+          if (d.raw) debugHtml += ` | AI\u56de\u61c9: ${escapeHtml(d.raw.substring(0, 100))}...`;
+        }
+        debugHtml += '</p>';
+      }
+    }
+    debugHtml += '<p style="font-size:0.8rem;color:var(--text-secondary);margin-top:var(--sp-sm);">\u{1f4a1} \u5efa\u8b70: \u8acb\u78ba\u8a8d\u5716\u7247\u6e05\u6670\u53ef\u8b80\uff0c\u7136\u5f8c\u6309 F12 \u958b\u555f\u4e3b\u63a7\u53f0\u67e5\u770b\u8a73\u7d30\u65e5\u8a8c</p>';
+    debugHtml += '</div>';
+    progressText.innerHTML = `\u8fa8\u8b58\u5b8c\u6210\u4f46\u672a\u627e\u5230\u984c\u76ee ${debugHtml}`;
+  } else {
+    progressText.textContent = `\u8fa8\u8b58\u5b8c\u6210\uff01\u5171\u627e\u5230 ${recognizedQuestions.length} \u984c`;
+  }
 
   isProcessing = false;
   btn.disabled = false;
@@ -372,6 +408,12 @@ function importAll(navigate) {
   const grade = parseInt(document.getElementById('scan-grade').value);
   const semester = parseInt(document.getElementById('scan-semester').value);
 
+  // Sync global settings so bank page shows the same filter
+  settings.grade = grade;
+  settings.semester = semester;
+  settings.subject = subject;
+  Storage.saveSettings(settings);
+
   let imported = 0;
   for (const q of recognizedQuestions) {
     try {
@@ -389,9 +431,12 @@ function importAll(navigate) {
       });
       imported++;
     } catch (e) {
-      console.warn('Import failed for question:', e);
+      console.warn('Import failed for question:', q, e);
     }
   }
+
+  console.log(`[Scan] Imported ${imported} questions. year=${settings.year}, grade=${grade}, semester=${semester}, subject=${subject}`);
+  console.log(`[Scan] Total questions in storage: ${Storage.getQuestions().length}`);
 
   showToast(`\u6210\u529f\u532f\u5165 ${imported} \u984c\u5230\u984c\u5eab\uff01`, 'success');
   recognizedQuestions = [];
