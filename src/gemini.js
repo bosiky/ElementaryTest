@@ -155,10 +155,11 @@ async function analyzeOneImage(base64Image, subject, subjectName, onStatus) {
           throw new Error('\u7121\u6cd5\u89e3\u6790 JSON');
         }
 
-        console.log(`[Gemini] Success via ${model.id}: ${result.questions?.length || 0}q, ${result.vocabulary?.length || 0}v`);
+        console.log(`[Gemini] Success via ${model.id}: ${result.questions?.length || 0}q, ${result.vocabulary?.length || 0}v, scope="${result.scope || ''}"`);
         return {
           questions: Array.isArray(result.questions) ? result.questions : [],
           vocabulary: Array.isArray(result.vocabulary) ? result.vocabulary : [],
+          scope: result.scope || '',
           model: model.name,
           rawResponse: text.substring(0, 200),
         };
@@ -183,6 +184,7 @@ export async function analyzeMultipleImages(images, subject, subjectName, onProg
   const allVocabulary = [];
   const errors = [];
   const debugInfo = [];
+  const scopes = [];
 
   for (let i = 0; i < images.length; i++) {
     onProgress?.(i, images.length, `\u6b63\u5728\u8fa8\u8b58\u7b2c ${i + 1}/${images.length} \u5f35...`);
@@ -194,7 +196,8 @@ export async function analyzeMultipleImages(images, subject, subjectName, onProg
       );
       if (result.questions?.length > 0) allQuestions.push(...result.questions);
       if (result.vocabulary?.length > 0) allVocabulary.push(...result.vocabulary);
-      debugInfo.push({ name: images[i].name, questions: result.questions?.length || 0, model: result.model, raw: result.rawResponse });
+      if (result.scope) scopes.push(result.scope);
+      debugInfo.push({ name: images[i].name, questions: result.questions?.length || 0, model: result.model, scope: result.scope, raw: result.rawResponse });
       onProgress?.(i + 1, images.length,
         `\u7b2c ${i+1} \u5f35 (${result.model}): ${result.questions?.length || 0} \u984c`);
     } catch (err) {
@@ -212,7 +215,12 @@ export async function analyzeMultipleImages(images, subject, subjectName, onProg
   console.log('[Gemini] === Summary ===');
   console.table(debugInfo);
 
-  return { questions: allQuestions, vocabulary: allVocabulary, errors, debugInfo };
+  // Pick the most common scope
+  const scopeCount = {};
+  scopes.forEach(s => { scopeCount[s] = (scopeCount[s] || 0) + 1; });
+  const bestScope = Object.entries(scopeCount).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+
+  return { questions: allQuestions, vocabulary: allVocabulary, errors, debugInfo, scope: bestScope };
 }
 
 function buildPrompt(subject, subjectName) {
@@ -234,31 +242,30 @@ Analyze this exam paper image for the subject: ${subjectName}
 ${extra}
 
 IMPORTANT: You MUST extract questions from this image. Try your best even if image quality is not perfect.
+IMPORTANT: Look at the TITLE or HEADER of the exam paper to identify the scope/range (e.g. "Our World Book 2 Unit 7", "南一版第三課", "康軒版第五單元"). Include this in the "scope" field.
 
 Return a JSON object:
 
 {
+  "scope": "the title or range of this exam, e.g. Our World Book 2 Unit 7",
   "questions": [
     {
       "type": "choice",
       "text": "question text",
       "options": ["A", "B", "C", "D"],
-      "answer": "correct option text",
-      "difficulty": "easy"
+      "answer": "correct option text"
     },
     {
       "type": "truefalse",
       "text": "complete statement to judge true or false",
       "options": [],
-      "answer": "O",
-      "difficulty": "easy"
+      "answer": "O"
     },
     {
       "type": "fill",
       "text": "A complete sentence with ____ for the blank",
       "options": [],
-      "answer": "answer",
-      "difficulty": "medium"
+      "answer": "answer"
     }
   ],
   "vocabulary": [
@@ -273,8 +280,9 @@ Rules:
 4. For truefalse: answer "O" or "X".
 5. For fill: the text MUST be a complete sentence with clear context. Never create isolated blanks without context.
 6. NEVER ask for Chinese translations of English words in questions.
-7. Extract as many questions as possible.
-8. Return valid JSON only.`;
+7. Extract the exam title/scope from the paper header. If none visible, use empty string.
+8. Extract as many questions as possible.
+9. Return valid JSON only.`;
 }
 
 export function vocabularyToQuestions(vocabulary, subject) {

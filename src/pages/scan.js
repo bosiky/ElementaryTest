@@ -8,6 +8,7 @@ import { analyzeMultipleImages, vocabularyToQuestions, validateApiKey, cleanupBa
 let uploadedImages = [];
 let recognizedQuestions = [];
 let recognizedVocab = [];
+let detectedScope = '';
 let isProcessing = false;
 
 export function renderScan(navigate) {
@@ -249,6 +250,7 @@ async function startRecognition() {
 
   recognizedQuestions = result.questions || [];
   recognizedVocab = result.vocabulary || [];
+  detectedScope = result.scope || '';
 
   // Show errors if any
   if (result.errors?.length > 0) {
@@ -289,7 +291,7 @@ async function startRecognition() {
     debugHtml += '</div>';
     progressText.innerHTML = `\u8fa8\u8b58\u5b8c\u6210\u4f46\u672a\u627e\u5230\u984c\u76ee ${debugHtml}`;
   } else {
-    progressText.textContent = `\u8fa8\u8b58\u5b8c\u6210\uff01\u5171\u627e\u5230 ${recognizedQuestions.length} \u984c`;
+    progressText.textContent = `\u8fa8\u8b58\u5b8c\u6210\uff01\u5171\u627e\u5230 ${recognizedQuestions.length} \u984c${detectedScope ? ` \uff08\u7bc4\u570d: ${detectedScope}\uff09` : ''}`;
   }
 
   isProcessing = false;
@@ -424,6 +426,7 @@ function importAll(navigate) {
         subject,
         type: q.type,
         difficulty: q.difficulty || 'medium',
+        scope: detectedScope,
         text: q.text,
         image: null,
         options: q.options || [],
@@ -442,6 +445,7 @@ function importAll(navigate) {
   recognizedQuestions = [];
   recognizedVocab = [];
   uploadedImages = [];
+  detectedScope = '';
   navigate('bank');
 }
 

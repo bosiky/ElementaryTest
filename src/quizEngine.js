@@ -22,6 +22,7 @@ export const QuizEngine = {
 
     if (options.subject) filters.subject = options.subject;
     if (options.difficulty) filters.difficulty = options.difficulty;
+    if (options.scope) filters.scope = options.scope;
 
     let pool = Storage.getFilteredQuestions(filters);
 
@@ -53,7 +54,7 @@ export const QuizEngine = {
       totalQuestions: questions.length,
       timeLimit: (options.timeLimit || 0) * 60, // convert to seconds
       subject: options.subject || 'all',
-      difficulty: options.difficulty || 'all',
+      scope: options.scope || 'all',
       startedAt: new Date().toISOString(),
     };
   },
@@ -75,6 +76,7 @@ export const QuizEngine = {
     };
     if (options.subject) filters.subject = options.subject;
     if (options.difficulty) filters.difficulty = options.difficulty;
+    if (options.scope) filters.scope = options.scope;
     return Storage.getFilteredQuestions(filters).length;
   },
 };

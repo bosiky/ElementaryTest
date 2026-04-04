@@ -50,6 +50,8 @@ export const QUESTION_TYPES = {
   fill: { name: '\u586b\u5145\u984c', icon: '\u270d\ufe0f' },
 };
 
+// Scope is now a free-text field extracted from exam paper titles
+// e.g. "Our World Book 2 Unit 7", "南一版第三課"
 export const DIFFICULTIES = {
   easy: { name: '\u7c21\u55ae', color: 'success' },
   medium: { name: '\u4e2d\u7b49', color: 'warning' },
@@ -86,6 +88,7 @@ export const QuestionBank = {
       subject: data.subject,
       type: data.type,
       difficulty: data.difficulty || 'medium',
+      scope: data.scope || '',
       content: {
         text: data.text || '',
         image: data.image || null,

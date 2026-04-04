@@ -128,6 +128,7 @@ export const Storage = {
     if (filters.subject) questions = questions.filter(q => q.subject === filters.subject);
     if (filters.type) questions = questions.filter(q => q.type === filters.type);
     if (filters.difficulty) questions = questions.filter(q => q.difficulty === filters.difficulty);
+    if (filters.scope) questions = questions.filter(q => q.scope === filters.scope);
     return questions;
   },
 

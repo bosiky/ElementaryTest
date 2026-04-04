@@ -1,14 +1,21 @@
-// pages/quiz.js - Quiz setup and exam taking
-
 import { Storage } from '../storage.js';
 import { SUBJECTS, QuestionBank } from '../questionBank.js';
 import { QuizEngine } from '../quizEngine.js';
-import { showToast, getSubjectOptions, getDifficultyOptions } from '../ui-helpers.js';
+import { showToast, getSubjectOptions } from '../ui-helpers.js';
 
 let currentQuiz = null;
 let currentIndex = 0;
 let timerInterval = null;
 let remainingTime = 0;
+
+function getScopeOptions() {
+  const settings = Storage.getSettings();
+  const questions = Storage.getFilteredQuestions({ year: settings.year, grade: settings.grade, semester: settings.semester });
+  const scopes = [...new Set(questions.map(q => q.scope).filter(Boolean))];
+  let html = '<option value="">\u5168\u90e8\u7bc4\u570d</option>';
+  scopes.forEach(s => { html += `<option value="${s}">${s}</option>`; });
+  return html;
+}
 
 export function renderQuizSetup(navigate) {
   const settings = Storage.getSettings();
@@ -21,11 +28,11 @@ export function renderQuizSetup(navigate) {
     <div class="card" style="max-width:600px;">
       <div class="form-group"><label class="form-label">\u79d1\u76ee\u7bc4\u570d</label>
         <select class="form-select" id="quiz-subject">${getSubjectOptions('', true)}</select></div>
-      <div class="form-group"><label class="form-label">\u96e3\u5ea6\u7bc4\u570d</label>
-        <select class="form-select" id="quiz-difficulty">${getDifficultyOptions('', true)}</select></div>
+      <div class="form-group"><label class="form-label">\u7bc4\u570d</label>
+        <select class="form-select" id="quiz-scope">${getScopeOptions()}</select></div>
       <div class="form-group"><label class="form-label">\u984c\u6578</label>
         <div class="option-group" id="quiz-count-group">
-          ${[5,10,15,20].map(n => `<button class="option-btn ${n===10?'selected':''}" data-val="${n}">${n} \u984c</button>`).join('')}
+          ${[5,10,20,30,40,50].map(n => `<button class="option-btn ${n===20?'selected':''}" data-val="${n}">${n} \u984c</button>`).join('')}
         </div>
         <div class="flex-row mt-md gap-sm"><input class="form-input" id="quiz-count-custom" type="number" min="1" max="100" placeholder="\u81ea\u8a02\u984c\u6578" style="max-width:150px;" /><span class="text-secondary" style="font-size:0.85rem">\u53ef\u7528: <span id="avail-count">${totalAvail}</span> \u984c</span></div>
       </div>
@@ -51,24 +58,24 @@ export function bindQuizSetup(navigate) {
   // Update available count when filters change
   const updateAvail = () => {
     const subj = document.getElementById('quiz-subject')?.value || '';
-    const diff = document.getElementById('quiz-difficulty')?.value || '';
-    const count = QuizEngine.getAvailableCount({ subject: subj || undefined, difficulty: diff || undefined });
+    const scope = document.getElementById('quiz-scope')?.value || '';
+    const count = QuizEngine.getAvailableCount({ subject: subj || undefined, scope: scope || undefined });
     const el = document.getElementById('avail-count');
     if (el) el.textContent = count;
   };
   document.getElementById('quiz-subject')?.addEventListener('change', updateAvail);
-  document.getElementById('quiz-difficulty')?.addEventListener('change', updateAvail);
+  document.getElementById('quiz-scope')?.addEventListener('change', updateAvail);
 
   // Start
   document.getElementById('start-quiz-btn')?.addEventListener('click', () => {
     const subject = document.getElementById('quiz-subject').value || undefined;
-    const difficulty = document.getElementById('quiz-difficulty').value || undefined;
+    const scope = document.getElementById('quiz-scope')?.value || undefined;
     const customCount = parseInt(document.getElementById('quiz-count-custom').value);
     const selectedBtn = document.querySelector('#quiz-count-group .option-btn.selected');
-    const count = customCount > 0 ? customCount : (selectedBtn ? parseInt(selectedBtn.dataset.val) : 10);
+    const count = customCount > 0 ? customCount : (selectedBtn ? parseInt(selectedBtn.dataset.val) : 20);
     const timeLimit = parseInt(document.getElementById('quiz-time').value) || 0;
 
-    const quiz = QuizEngine.generateQuiz({ count, subject, difficulty, timeLimit });
+    const quiz = QuizEngine.generateQuiz({ count, subject, scope, timeLimit });
     if (quiz.error === 'no_questions') {
       showToast('\u7b26\u5408\u689d\u4ef6\u7684\u984c\u76ee\u4e0d\u8db3', 'error');
       return;

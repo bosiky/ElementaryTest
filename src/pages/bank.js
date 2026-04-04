@@ -2,7 +2,7 @@
 
 import { Storage } from '../storage.js';
 import { SUBJECTS, QUESTION_TYPES, DIFFICULTIES, QuestionBank } from '../questionBank.js';
-import { showToast, showModal, closeModal, getSubjectOptions, getTypeOptions, getDifficultyOptions } from '../ui-helpers.js';
+import { showToast, showModal, closeModal, getSubjectOptions, getTypeOptions } from '../ui-helpers.js';
 import { cleanupBadQuestions } from '../gemini.js';
 
 let currentImage = null;
@@ -33,7 +33,7 @@ export function renderBank(navigate) {
           <div class="question-meta">
             <span class="tag tag-primary">${subj.icon} ${subj.name}</span>
             <span class="tag tag-info">${typeInfo.name}</span>
-            <span class="tag tag-${diff.color}">${diff.name}</span>
+            ${q.scope ? `<span class="tag tag-warning">${escapeHtml(q.scope)}</span>` : ''}
             <span class="tag tag-accent">\u7b54\u6848: ${escapeHtml(q.answer)}</span>
           </div>
         </div>
@@ -95,8 +95,8 @@ function openQuestionModal(existingQ, navigate) {
       <div class="form-group"><label class="form-label">\u984c\u578b</label>
         <select class="form-select" id="q-type">${getTypeOptions(existingQ?.type || 'choice')}</select></div>
     </div>
-    <div class="form-group"><label class="form-label">\u96e3\u5ea6</label>
-      <select class="form-select" id="q-difficulty">${getDifficultyOptions(existingQ?.difficulty || 'medium')}</select></div>
+    <div class="form-group"><label class="form-label">\u7bc4\u570d</label>
+      <input class="form-input" id="q-scope" value="${escapeHtml(existingQ?.scope || '')}" placeholder="\u4f8b\u5982: Our World Book 2 Unit 7" /></div>
     <div class="form-group"><label class="form-label">\u984c\u76ee\u5167\u5bb9 (\u6587\u5b57)</label>
       <textarea class="form-textarea" id="q-text" placeholder="\u8f38\u5165\u984c\u76ee\u6587\u5b57...">${existingQ?.content?.text || ''}</textarea></div>
     <div class="form-group"><label class="form-label">\u984c\u76ee\u5716\u7247 (\u9078\u586b)</label>
@@ -184,7 +184,7 @@ function openQuestionModal(existingQ, navigate) {
     const data = {
       year: settings.year, grade: settings.grade, semester: settings.semester,
       subject: document.getElementById('q-subject').value,
-      type, difficulty: document.getElementById('q-difficulty').value,
+      type, scope: document.getElementById('q-scope').value.trim(),
       text, image: currentImage, options, answer,
     };
 
