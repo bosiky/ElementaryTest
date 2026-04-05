@@ -1723,3 +1723,30 @@ body::before {
 .question-item:hover .question-text {
   -webkit-line-clamp: unset;
 }
+
+/* Floating scroll FAB */
+.scroll-fab {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font-size: 1.3rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+  z-index: 100;
+  transition: all 0.25s ease;
+  opacity: 0.85;
+}
+.scroll-fab:hover {
+  opacity: 1;
+  transform: scale(1.1);
+  box-shadow: 0 6px 24px rgba(0,0,0,0.4);
+}

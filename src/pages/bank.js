@@ -21,6 +21,9 @@ export function renderBank(navigate) {
   const settings = Storage.getSettings();
   const questions = Storage.getFilteredQuestions({ year: settings.year, grade: settings.grade, semester: settings.semester });
 
+  // Detect duplicates
+  const dupCount = findDuplicates(questions).length;
+
   // Collect scopes for filter
   const allScopes = [...new Set(questions.map(q => q.scope).filter(Boolean))];
 
@@ -105,6 +108,18 @@ export function renderBank(navigate) {
       </div>
     </div>`;
 
+  // Duplicate warning
+  const dupHtml = dupCount > 0 ? `
+    <div class="card" style="margin-bottom:var(--sp-md);padding:var(--sp-md);border:1px solid var(--danger);background:var(--bg-elevated);">
+      <div class="flex-between flex-wrap gap-sm" style="align-items:center;">
+        <div>
+          <strong style="color:var(--danger);">\u26a0\ufe0f \u767c\u73fe ${dupCount} \u984c\u91cd\u8907\u984c\u76ee</strong>
+          <p style="font-size:0.85rem;color:var(--text-secondary);margin:4px 0 0;">\u76f8\u540c\u984c\u76ee\u5167\u5bb9\u548c\u7b54\u6848\u7684\u984c\u76ee\u6703\u88ab\u8996\u70ba\u91cd\u8907</p>
+        </div>
+        <button class="btn btn-sm btn-danger" id="remove-dup-btn">\u{1f5d1}\ufe0f \u79fb\u9664\u91cd\u8907</button>
+      </div>
+    </div>` : '';
+
   return `<div class="page-enter">
     <div class="flex-between flex-wrap gap-md mb-lg">
       <div><h1 class="page-title">\u{1f4da} \u984c\u5eab\u7ba1\u7406</h1>
@@ -118,13 +133,11 @@ export function renderBank(navigate) {
         <button class="btn btn-outline" id="import-btn">\u{1f4e5} \u532f\u5165</button>
       </div>
     </div>
+    ${dupHtml}
     ${batchScopeHtml}
     ${selectToolbar}
     ${listHtml}
-    ${questions.length > 5 ? `<div style="display:flex;justify-content:center;gap:8px;margin-top:var(--sp-lg);">
-      <button class="btn btn-sm btn-ghost" id="scroll-top-btn">\u2b06 \u56de\u5230\u9802\u90e8</button>
-      <button class="btn btn-sm btn-ghost" id="scroll-bottom-btn">\u2b07 \u6edd\u5230\u5e95\u90e8</button>
-    </div>` : ''}
+    <button class="scroll-fab" id="scroll-fab" title="\u6edd\u5230\u5e95\u90e8">\u2b07</button>
   </div>`;
 }
 
@@ -140,12 +153,50 @@ export function bindBank(navigate) {
     navigate('bank');
   });
 
-  // Scroll buttons
-  document.getElementById('scroll-top-btn')?.addEventListener('click', () => {
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  });
-  document.getElementById('scroll-bottom-btn')?.addEventListener('click', () => {
-    window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+  // Floating scroll FAB
+  const fab = document.getElementById('scroll-fab');
+  if (fab) {
+    const updateFab = () => {
+      const scrollTop = window.scrollY || document.documentElement.scrollTop;
+      const scrollHeight = document.documentElement.scrollHeight;
+      const clientHeight = document.documentElement.clientHeight;
+      const atBottom = scrollTop + clientHeight >= scrollHeight - 80;
+      if (atBottom) {
+        fab.textContent = '\u2b06';
+        fab.title = '\u56de\u5230\u9802\u90e8';
+        fab.dataset.dir = 'up';
+      } else {
+        fab.textContent = '\u2b07';
+        fab.title = '\u6edd\u5230\u5e95\u90e8';
+        fab.dataset.dir = 'down';
+      }
+      // Show/hide based on page height
+      fab.style.display = scrollHeight > clientHeight + 200 ? 'flex' : 'none';
+    };
+    window.addEventListener('scroll', updateFab, { passive: true });
+    updateFab();
+    fab.addEventListener('click', () => {
+      if (fab.dataset.dir === 'up') {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      } else {
+        window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+      }
+    });
+  }
+
+  // Remove duplicates
+  document.getElementById('remove-dup-btn')?.addEventListener('click', () => {
+    const settings = Storage.getSettings();
+    const all = Storage.getQuestions();
+    const filtered = Storage.getFilteredQuestions({ year: settings.year, grade: settings.grade, semester: settings.semester });
+    const dupIds = findDuplicates(filtered).map(q => q.id);
+    if (dupIds.length === 0) return;
+    if (!confirm(`\u78ba\u5b9a\u8981\u79fb\u9664 ${dupIds.length} \u984c\u91cd\u8907\u984c\u76ee\u55ce\uff1f`)) return;
+    const removeSet = new Set(dupIds);
+    const remaining = all.filter(q => !removeSet.has(q.id));
+    Storage.saveQuestions(remaining);
+    showToast(`\u5df2\u79fb\u9664 ${dupIds.length} \u984c\u91cd\u8907`, 'success');
+    navigate('bank');
   });
 
   // Pagination
@@ -431,4 +482,22 @@ function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str;
   return div.innerHTML;
+}
+
+/**
+ * Find duplicate questions based on text+answer.
+ * Returns the duplicate entries (keeps the first occurrence, marks later ones as dupes).
+ */
+function findDuplicates(questions) {
+  const seen = new Map();
+  const dupes = [];
+  for (const q of questions) {
+    const key = `${(q.content?.text || '').trim().toLowerCase()}|${(q.answer || '').trim().toLowerCase()}|${q.type}`;
+    if (seen.has(key)) {
+      dupes.push(q);
+    } else {
+      seen.set(key, q);
+    }
+  }
+  return dupes;
 }
