@@ -8,9 +8,11 @@ let currentIndex = 0;
 let timerInterval = null;
 let remainingTime = 0;
 
-function getScopeOptions() {
+function getScopeOptions(subject) {
   const settings = Storage.getSettings();
-  const questions = Storage.getFilteredQuestions({ year: settings.year, grade: settings.grade, semester: settings.semester });
+  const filters = { year: settings.year, grade: settings.grade, semester: settings.semester };
+  if (subject) filters.subject = subject;
+  const questions = Storage.getFilteredQuestions(filters);
   const scopes = [...new Set(questions.map(q => q.scope).filter(Boolean))];
   let html = '<option value="">\u5168\u90e8\u7bc4\u570d</option>';
   scopes.forEach(s => { html += `<option value="${s}">${s}</option>`; });
@@ -26,10 +28,10 @@ export function renderQuizSetup(navigate) {
     <p class="page-subtitle">\u8a2d\u5b9a\u51fa\u984c\u689d\u4ef6\u5f8c\u958b\u59cb\u4f5c\u7b54 (\u76ee\u524d\u984c\u5eab\u5171 ${totalAvail} \u984c)</p>
     ${totalAvail === 0 ? `<div class="card text-center" style="padding:var(--sp-3xl)"><div style="font-size:3rem;margin-bottom:var(--sp-md)">\u{1f4ed}</div><p>\u984c\u5eab\u4e2d\u6c92\u6709\u984c\u76ee\uff0c\u8acb\u5148\u5230\u300c\u984c\u5eab\u7ba1\u7406\u300d\u65b0\u589e\u984c\u76ee</p><button class="btn btn-primary mt-lg" id="go-bank-btn">\u524d\u5f80\u984c\u5eab\u7ba1\u7406</button></div>` : `
     <div class="card" style="max-width:600px;">
-      <div class="form-group"><label class="form-label">\u79d1\u76ee\u7bc4\u570d</label>
+      <div class="form-group"><label class="form-label">\u79d1\u76ee</label>
         <select class="form-select" id="quiz-subject">${getSubjectOptions('', true)}</select></div>
       <div class="form-group"><label class="form-label">\u7bc4\u570d</label>
-        <select class="form-select" id="quiz-scope">${getScopeOptions()}</select></div>
+        <select class="form-select" id="quiz-scope">${getScopeOptions('')}</select></div>
       <div class="form-group"><label class="form-label">\u984c\u6578</label>
         <div class="option-group" id="quiz-count-group">
           ${[5,10,20,30,40,50].map(n => `<button class="option-btn ${n===20?'selected':''}" data-val="${n}">${n} \u984c</button>`).join('')}
@@ -55,7 +57,7 @@ export function bindQuizSetup(navigate) {
     });
   });
 
-  // Update available count when filters change
+  // Update available count and scope options when filters change
   const updateAvail = () => {
     const subj = document.getElementById('quiz-subject')?.value || '';
     const scope = document.getElementById('quiz-scope')?.value || '';
@@ -63,7 +65,16 @@ export function bindQuizSetup(navigate) {
     const el = document.getElementById('avail-count');
     if (el) el.textContent = count;
   };
-  document.getElementById('quiz-subject')?.addEventListener('change', updateAvail);
+
+  // When subject changes, reload scope dropdown to show only scopes for that subject
+  document.getElementById('quiz-subject')?.addEventListener('change', () => {
+    const subj = document.getElementById('quiz-subject').value;
+    const scopeSelect = document.getElementById('quiz-scope');
+    if (scopeSelect) {
+      scopeSelect.innerHTML = getScopeOptions(subj || '');
+    }
+    updateAvail();
+  });
   document.getElementById('quiz-scope')?.addEventListener('change', updateAvail);
 
   // Start

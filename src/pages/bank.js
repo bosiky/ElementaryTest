@@ -8,6 +8,7 @@ import { cleanupBadQuestions } from '../gemini.js';
 let currentImage = null;
 let selectedIds = new Set();
 let isSelectMode = false;
+let bankSubjectFilter = '';
 const PAGE_SIZE = 50;
 let currentPage = 1;
 
@@ -19,7 +20,15 @@ export function renderBank(navigate) {
   }
 
   const settings = Storage.getSettings();
-  const questions = Storage.getFilteredQuestions({ year: settings.year, grade: settings.grade, semester: settings.semester });
+  const allQuestions = Storage.getFilteredQuestions({ year: settings.year, grade: settings.grade, semester: settings.semester });
+
+  // Collect available subjects for filter
+  const availSubjects = [...new Set(allQuestions.map(q => q.subject).filter(Boolean))];
+
+  // Filter by subject
+  const questions = bankSubjectFilter
+    ? allQuestions.filter(q => q.subject === bankSubjectFilter)
+    : allQuestions;
 
   // Detect duplicates
   const dupCount = findDuplicates(questions).length;
@@ -120,10 +129,22 @@ export function renderBank(navigate) {
       </div>
     </div>` : '';
 
+  // Subject filter
+  const subjectFilterHtml = `
+    <div class="flex-row gap-sm flex-wrap" style="margin-bottom:var(--sp-md);align-items:center;">
+      <span style="font-size:0.9rem;color:var(--text-secondary);">篩選科目:</span>
+      <button class="btn btn-sm ${!bankSubjectFilter ? 'btn-primary' : 'btn-outline'}" data-subj-filter="">全部 (${allQuestions.length})</button>
+      ${availSubjects.map(s => {
+        const info = SUBJECTS[s] || { icon: '', name: s };
+        const cnt = allQuestions.filter(q => q.subject === s).length;
+        return `<button class="btn btn-sm ${bankSubjectFilter === s ? 'btn-primary' : 'btn-outline'}" data-subj-filter="${s}">${info.icon} ${info.name} (${cnt})</button>`;
+      }).join('')}
+    </div>`;
+
   return `<div class="page-enter">
     <div class="flex-between flex-wrap gap-md mb-lg">
       <div><h1 class="page-title">\u{1f4da} \u984c\u5eab\u7ba1\u7406</h1>
-        <p class="page-subtitle" style="margin-bottom:0">${settings.year} \u5b78\u5e74\u5ea6 ${QuestionBank.formatGrade(settings.grade)} ${QuestionBank.formatSemester(settings.semester)} - \u5171 ${questions.length} \u984c</p>
+        <p class="page-subtitle" style="margin-bottom:0">${settings.year} \u5b78\u5e74\u5ea6 ${QuestionBank.formatGrade(settings.grade)} ${QuestionBank.formatSemester(settings.semester)} - \u5171 ${questions.length} \u984c${bankSubjectFilter ? ` (${(SUBJECTS[bankSubjectFilter] || {name: bankSubjectFilter}).name})` : ''}</p>
       </div>
       <div class="flex-row gap-sm flex-wrap">
         <button class="btn btn-primary" id="add-question-btn">\u2795 \u65b0\u589e\u984c\u76ee</button>
@@ -133,6 +154,7 @@ export function renderBank(navigate) {
         <button class="btn btn-outline" id="import-btn">\u{1f4e5} \u532f\u5165</button>
       </div>
     </div>
+    ${subjectFilterHtml}
     ${dupHtml}
     ${batchScopeHtml}
     ${selectToolbar}
@@ -146,6 +168,15 @@ export function bindBank(navigate) {
   document.getElementById('export-btn')?.addEventListener('click', handleExport);
   document.getElementById('import-btn')?.addEventListener('click', handleImport.bind(null, navigate));
 
+  // Subject filter buttons
+  document.querySelectorAll('[data-subj-filter]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      bankSubjectFilter = btn.dataset.subjFilter;
+      currentPage = 1;
+      navigate('bank');
+    });
+  });
+
   // Toggle select mode
   document.getElementById('toggle-select-btn')?.addEventListener('click', () => {
     isSelectMode = !isSelectMode;
@@ -153,7 +184,7 @@ export function bindBank(navigate) {
     navigate('bank');
   });
 
-  // Floating scroll FAB
+  // Floating scroll FAB — always visible, toggles direction
   const fab = document.getElementById('scroll-fab');
   if (fab) {
     const updateFab = () => {
@@ -170,8 +201,6 @@ export function bindBank(navigate) {
         fab.title = '\u6edd\u5230\u5e95\u90e8';
         fab.dataset.dir = 'down';
       }
-      // Show/hide based on page height
-      fab.style.display = scrollHeight > clientHeight + 200 ? 'flex' : 'none';
     };
     window.addEventListener('scroll', updateFab, { passive: true });
     updateFab();
